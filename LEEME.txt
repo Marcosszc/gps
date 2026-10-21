@@ -1,0 +1,6 @@
+RAIZ DEL REPO (lo que va a GitHub y Render usa):
+  server.js, package.json, index.html, .gitignore
+CARPETA gps_esp32 (solo para Arduino IDE, Render la ignora):
+  gps_esp32/gps_esp32.ino
+
+Render: Web Service | Root Directory vacio | Build: npm install | Start: node server.js | Variable: API_KEY
