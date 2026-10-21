@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🐾 Rastreador GPS de Mascotas | En Vivo</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
+  html, body { height: 100%; }
+  body { background: #0f172a; color: #f8fafc; display: flex; flex-direction: column; }
+  header { background: linear-gradient(135deg,#1e1b4b,#312e81 50%,#4338ca); padding: 14px 18px;
+    display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px;
+    border-bottom: 2px solid #6366f1; }
+  header h1 { font-size: 1.2rem; }
+  header p { font-size: .78rem; color: #c7d2fe; margin-top: 2px; }
+  .badge { display: inline-flex; align-items: center; gap: 10px; padding: 7px 16px; border-radius: 9999px;
+    font-size: .85rem; font-weight: 700; background: rgba(15,23,42,.8); border: 1px solid; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; animation: pulso 1.5s infinite; }
+  .badge.online  { color: #34d399; border-color: rgba(16,185,129,.4); } .online  .dot { background: #10b981; box-shadow: 0 0 12px #10b981; }
+  .badge.offline { color: #f87171; border-color: rgba(239,68,68,.4); }  .offline .dot { background: #ef4444; box-shadow: 0 0 12px #ef4444; }
+  .badge.espera  { color: #fbbf24; border-color: rgba(251,191,36,.4); } .espera  .dot { background: #f59e0b; box-shadow: 0 0 12px #f59e0b; }
+  @keyframes pulso { 50% { opacity: .5; transform: scale(.9); } }
+  @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+  .layout { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  @media (min-width: 850px) { .layout { flex-direction: row; } aside { max-width: 340px; overflow-y: auto; } }
+  aside { background: #1e293b; width: 100%; padding: 16px; display: flex; flex-direction: column; gap: 12px; border-right: 1px solid #334155; }
+  .card { background: #0f172a; border: 1px solid #334155; border-radius: 12px; padding: 14px; }
+  .card h2 { font-size: .75rem; color: #94a3b8; font-weight: 700; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+  .item { background: #1e293b; padding: 9px; border-radius: 8px; }
+  .item span { display: block; font-size: .72rem; color: #94a3b8; }
+  .item strong { display: block; font-size: 1rem; color: #38bdf8; font-family: ui-monospace, monospace; margin-top: 2px; }
+  .lista { font-size: .85rem; line-height: 1.8; }
+  #map { flex: 1; min-height: 420px; background: #090d16; }
+  .botones { display: flex; flex-direction: column; gap: 8px; }
+  button { border: 0; padding: 11px; border-radius: 8px; font-weight: 600; font-size: .9rem; cursor: pointer; color: #fff; background: #4f46e5; }
+  button:hover { background: #4338ca; }
+  button.sec { background: #334155; } button.sec:hover { background: #475569; }
+  button:focus-visible { outline: 2px solid #a5b4fc; outline-offset: 2px; }
+  a { color: #818cf8; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>🐾 Rastreador GPS de Mascotas</h1>
+    <p>ESP32 DevKit V1 + GY-GPS6MV2 | Proyecto de Robótica (Paraguay)</p>
+  </div>
+  <div class="badge offline" id="badge"><span class="dot"></span><span id="badgeTxt">Conectando...</span></div>
+</header>
+
+<div class="layout">
+  <aside>
+    <div class="card">
+      <h2>📍 Coordenadas actuales</h2>
+      <div class="grid">
+        <div class="item"><span>Latitud</span><strong id="lat">--.------</strong></div>
+        <div class="item"><span>Longitud</span><strong id="lng">--.------</strong></div>
+        <div class="item"><span>Velocidad</span><strong id="vel">--</strong></div>
+        <div class="item"><span>Satélites</span><strong id="sat">--</strong></div>
+      </div>
+    </div>
+    <div class="card lista">
+      <div>📡 ESP32: <strong id="estado" style="color:#f87171">Sin datos</strong></div>
+      <div>⏱️ Último dato: <strong id="hora">Sin datos</strong></div>
+      <div>🐾 Puntos en ruta: <strong id="puntos">0</strong></div>
+      <div id="mapsLink"></div>
+    </div>
+    <div class="botones">
+      <button id="btnCentrar">🎯 Seguir a la mascota</button>
+      <button class="sec" id="btnBorrar">🧹 Ocultar recorrido</button>
+      <button class="sec" id="btnDemo">▶️ Probar demo</button>
+    </div>
+  </aside>
+  <div id="map"></div>
+</div>
+
+<script>
+  const LIMITE = 30; // segundos sin datos del ESP32 para considerarlo desconectado
+
+  const map = L.map('map').setView([-25.283045, -57.631999], 15);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '© OpenStreetMap contributors'
+  }).addTo(map);
+
+  const icono = L.divIcon({
+    html: '<div style="background:#4f46e5;border:3px solid #fff;border-radius:50%;width:40px;height:40px;display:flex;align-items:center;justify-content:center;font-size:22px;box-shadow:0 4px 12px rgba(0,0,0,.6)">🐶</div>',
+    iconSize: [40, 40], iconAnchor: [20, 20], className: ''
+  });
+
+  let marker = null, siguiendo = true, primera = true, demo = false, demoTimer = null, ang = 0;
+  let ruta = [], datos = null, t0 = 0;
+  const linea = L.polyline([], { color: '#818cf8', weight: 4, dashArray: '5, 5' }).addTo(map);
+  map.on('dragstart', () => { siguiendo = false; });
+  const $ = id => document.getElementById(id);
+
+  function setEstado(tipo, badge, estado, color) {
+    $('badge').className = 'badge ' + tipo;
+    $('badgeTxt').textContent = badge;
+    $('estado').textContent = estado;
+    $('estado').style.color = color;
+  }
+
+  function ponerPunto(lat, lng, vel, sat) {
+    $('lat').textContent = lat.toFixed(6);
+    $('lng').textContent = lng.toFixed(6);
+    $('vel').textContent = Number(vel || 0).toFixed(1) + ' km/h';
+    $('sat').textContent = sat;
+    $('mapsLink').innerHTML = '🗺️ <a target="_blank" rel="noopener" href="https://www.google.com/maps?q=' + lat + ',' + lng + '">Abrir en Google Maps</a>';
+    const p = [lat, lng];
+    if (!marker) marker = L.marker(p, { icon: icono }).addTo(map).bindPopup('<b>🐾 ¡Tu mascota está aquí!</b>');
+    else marker.setLatLng(p);
+    const ult = ruta[ruta.length - 1];
+    if (!ult || map.distance(ult, p) > 3) { ruta.push(p); linea.setLatLngs(ruta); $('puntos').textContent = ruta.length; }
+    if (primera) { map.setView(p, 17); primera = false; }
+    else if (siguiendo) map.panTo(p);
+  }
+
+  async function consultar() {
+    if (demo) return;
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 10000);
+    try {
+      const r = await fetch('/api/location', { signal: ctrl.signal, cache: 'no-store' });
+      clearTimeout(t);
+      if (!r.ok) throw new Error();
+      datos = await r.json(); t0 = Date.now();
+      if (datos.pos) ponerPunto(datos.pos.lat, datos.pos.lng, datos.pos.speed, datos.pos.sats);
+      pintar();
+    } catch (e) {
+      clearTimeout(t);
+      setEstado('espera', 'Servidor despertando... (puede tardar 1 min)', 'Esperando servidor', '#fbbf24');
+    }
+  }
+
+  // Estado en vivo (se refresca cada segundo)
+  function pintar() {
+    if (demo || !datos) return;
+    if (datos.deviceAgeMs === null) {
+      setEstado('offline', 'Esperando al ESP32', 'Nunca se conectó', '#f87171');
+      $('hora').textContent = 'Sin datos'; return;
+    }
+    const seg = Math.round((datos.deviceAgeMs + (Date.now() - t0)) / 1000);
+    $('hora').textContent = seg < 60 ? 'hace ' + seg + ' s' : 'hace ' + Math.round(seg / 60) + ' min';
+    if (seg > LIMITE) setEstado('offline', 'ESP32 desconectado', 'Desconectado', '#f87171');
+    else if (!datos.pos || (datos.pos.ageMs + (Date.now() - t0)) / 1000 > 15)
+      setEstado('espera', 'ESP32 conectado, buscando satélites (' + datos.deviceSats + ')', 'Sin fix GPS', '#fbbf24');
+    else setEstado('online', 'Conectado con rastreador', 'En línea con GPS', '#34d399');
+  }
+
+  $('btnCentrar').onclick = () => { siguiendo = true; if (marker) { map.setView(marker.getLatLng(), 17, { animate: true }); marker.openPopup(); } };
+  $('btnBorrar').onclick = () => { ruta = []; linea.setLatLngs([]); $('puntos').textContent = 0; };
+
+  function pasoDemo() {
+    ang += 0.08;
+    ponerPunto(-25.2830 + 0.004 * Math.sin(ang), -57.6320 + 0.006 * Math.cos(ang), 4 + 2 * Math.sin(ang * 3), 9);
+    setEstado('espera', 'MODO DEMO (datos simulados)', 'Demo', '#fbbf24');
+    $('hora').textContent = 'simulado';
+  }
+  $('btnDemo').onclick = () => {
+    demo = !demo;
+    $('btnDemo').textContent = demo ? '⏹️ Salir del demo' : '▶️ Probar demo';
+    if (demo) { primera = true; siguiendo = true; ruta = []; linea.setLatLngs([]); pasoDemo(); demoTimer = setInterval(pasoDemo, 1000); }
+    else {
+      clearInterval(demoTimer);
+      if (marker) { map.removeLayer(marker); marker = null; }
+      ruta = []; linea.setLatLngs([]); $('puntos').textContent = 0; primera = true;
+      cargarHistorial().then(consultar);
+    }
+  };
+
+  async function cargarHistorial() {
+    try { ruta = await (await fetch('/api/history', { cache: 'no-store' })).json(); linea.setLatLngs(ruta); $('puntos').textContent = ruta.length; } catch (e) {}
+  }
+
+  cargarHistorial().then(consultar);
+  setInterval(consultar, 3000);
+  setInterval(pintar, 1000);
+</script>
+</body>
+</html>
